@@ -1,19 +1,21 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Cretheus where
 
 import Control.Monad
 import Control.Applicative
 import Data.Monoid
 import qualified Data.Aeson as A
-import Data.Aeson.Types
+import qualified Data.Aeson.Types as A
 import Data.Text
 
 -- Compat
 
-(.:) ::  FromJSON a => Object -> Text -> ReifiedP a
+(.:) ::  FromJSON a => A.Object -> Text -> ReifiedP a
 (.:)  = (:.:)
 
-(.:?) :: FromJSON b => Object -> Text -> ReifiedP (Maybe b)
+(.:?) :: FromJSON b => A.Object -> Text -> ReifiedP (Maybe b)
 (.:?) = (:.:?)
 
 (.!=) :: ReifiedP (Maybe a) -> a -> ReifiedP a
@@ -21,12 +23,14 @@ import Data.Text
 
 
 class FromJSON a where
-    parseJSON :: Value -> ReifiedP a
+    parseJSON :: A.Value -> ReifiedP a
 
+instance FromJSON a => A.FromJSON a where
+    parseJSON = interpretR . parseJSON
 
 data ReifiedP a where
-    (:.:)  :: FromJSON a => Object -> Text -> ReifiedP a
-    (:.:?) :: FromJSON b => Object -> Text -> ReifiedP (Maybe b)
+    (:.:)  :: FromJSON a => A.Object -> Text -> ReifiedP a
+    (:.:?) :: FromJSON b => A.Object -> Text -> ReifiedP (Maybe b)
     (:.!=) :: ReifiedP (Maybe a) -> a -> ReifiedP a
     (:>>=) :: ReifiedP a -> (a -> ReifiedP b) -> ReifiedP b
     Ret    :: a -> ReifiedP a
@@ -57,7 +61,7 @@ instance Monoid (ReifiedP a) where
     mempty = mzero
     mappend = mplus
 
-interpretR :: ReifiedP a -> Parser a
+interpretR :: ReifiedP a -> A.Parser a
 interpretR (a :.:  b) = a A..: b
 interpretR (a :.:? b) = a A..:? b
 interpretR (a :.!= b) = interpretR a A..!= b
