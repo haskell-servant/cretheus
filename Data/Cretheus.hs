@@ -61,6 +61,8 @@ instance FromJSON a => A.FromJSON a where
     parseJSON = interpretR . parseJSON
 
 
+-- It'll be important to keep track of which fields may be evaluated, and
+-- which may not.
 data ReifiedP a where
     (:.:)  :: FromJSON a => A.Object -> Text -> ReifiedP a
     (:.:?) :: FromJSON b => A.Object -> Text -> ReifiedP (Maybe b)
@@ -128,11 +130,12 @@ show' :: ReifiedP a -> String
 show' (a :.:  b) = "Required: " ++ unpack b
 show' (a :.:? b) = "Optional: " ++ unpack b
 show' (a :.!= b) = show' a ++ " with default" ++ show b
-show' (a :>>= f) = show' a ++ "\t bind"
-show' (Ret a)     = "ret"
+show' (a :>>= f) = show' a ++ show' (f undefined)
+show' (Ret a)     = "\n"
 show' Mzero       = "mzero"
 show' (Mplus a b) = show' a ++ "or\n" ++ show' b
-show' (WithText a f v) = "Expects: " ++ a  ++ (show' $ f undefined)
+show' (WithText a f v) = "Expects: " ++ a  ++ show' (f undefined)
+
 instance FromJSON Test1 where
     parseJSON (A.Object v) = Test1 <$> v .: "field1"
                                    <*> v .: "field2"
