@@ -51,39 +51,39 @@ import Data.Monoid
 import Data.Text
 import Data.Typeable
 import Data.Scientific
-import Data.Proxy
 
 -- Schema
 
-data Typ
-
-data a :*: b = a :*: b
-data a :+: b = a :+: b
-
-
 data Schema' where
-    Required :: Text -> Typ -> Schema'
-    Optional :: Text -> Typ -> Schema'
-    Default :: Text -> String -> Typ -> Schema'
+    Required :: Text -> TypeRep -> Schema'
+    Optional :: Text -> TypeRep -> Schema'
+    Default :: Text -> String -> TypeRep -> Schema'
     And :: Schema' -> Schema' -> Schema'
     Or  :: Schema' -> Schema' -> Schema'
+    Nil :: Schema'     -- Leaf that doesn't parse
+    Empty :: Schema'   -- Leaf that parses with no further requirements
+    deriving Show
 
 -- | Make a schema from a reified parser. Assumes that only the
 -- @cretheus@-provided combinators (and instance methods) are used on the
 -- inner-value of 'parseJSON''s first argument (the 'Value').
-mkSchema :: Show a => Parser a -> Schema'
-mkSchema (a :.:  txt) = Required txt $ typeOf' (Proxy::Proxy a)
-mkSchema (a :.:? txt) = Optional txt $ typeOf' (Proxy::Proxy a)
+mkSchema :: Typeable a => Parser a -> Schema'
+mkSchema (_ :.:  txt) = Required txt $ typeOf (undefined::a)
+mkSchema (_ :.:? txt) = Optional txt $ typeOf (undefined::a)
 mkSchema (a :.!= def) = case mkSchema a of
-                            Optional txt typ -> Default txt (show def) typ
-{-mkSchema (a :>>= f) = m-}
-{-mkSchema (Ret a)     = return a-}
-{-mkSchema Mzero       = -}
-mkSchema (Mplus a b) = mkSchema a `And` mkSchema b
+                            Optional txt typ -> Default txt (showA def) typ
+                            _ -> error "Not implemented"
+mkSchema (f :<*> b)  = mkSchema f `And` mkSchema b
+mkSchema (Ret _)     = Empty
+{-mkSchema Mzero       = Nil-}
+{-mkSchema (Mplus a b) = mkSchema a `Or` mkSchema b-}
+mkSchema (WithText _ f _) = mkSchema (f undefined)
+-- How do we get the RHS of bind to have a Typeable constraint, and still
+-- manage to declare a monad instance?
+{-mkSchema (a :>>= f) = mkSchema a `And` mkSchema (f undefined)-}
 
-
-typeOf' :: Proxy a -> Typ
 typeOf' = undefined
+showA = undefined
 -- Compat
 
 (.:) ::  FromJSON a => A.Object -> Text -> Parser a
@@ -135,12 +135,16 @@ instance FromJSON a => A.FromJSON a where
 data Parser a where
     (:.:)  :: FromJSON a => A.Object -> Text -> Parser a
     (:.:?) :: FromJSON b => A.Object -> Text -> Parser (Maybe b)
-    (:.!=) :: Show a => Parser (Maybe a) -> a -> Parser a
-    (:>>=) :: Parser a -> (a -> Parser b) -> Parser b
-    Ret    :: a -> Parser a
-    Mzero  :: Parser a
-    Mplus  :: Parser a -> Parser a -> Parser a
-    WithText :: String -> (Text -> Parser a) -> Value -> Parser a
+    (:.!=) :: Show a => ParserApplicative (Maybe a) -> a -> Parser a
+    (:>>=) :: ParserApplicative a -> (a -> ParserApplicative b) -> Parser b
+    {-Mzero  :: Parser a-}
+    {-Mplus  :: Parser a -> Parser a -> Parser a-}
+    WithText :: String -> (Text -> ParserApplicative a) -> Value -> Parser a
+
+data ParserApplicative a where
+    (:<*>) :: Typeable a => Parser (a -> b) -> Parser a -> ParserApplicative b
+    Ret    :: a -> ParserApplicative a
+
 
 {-
 - (:<*>) === RP (a -> b) -> RP a -> RP b
@@ -149,24 +153,26 @@ data Parser a where
 -}
 
 
-instance Monad Parser where
-    (>>=) = (:>>=)
-    return = Ret
+{-instance Monad Parser where-}
+    {-(>>=) = (:>>=)-}
+    {-return = Ret-}
 
-instance MonadPlus Parser where
-    mzero = Mzero
-    mplus = Mplus
+{-instance MonadPlus Parser where-}
+    {-mzero = Mzero-}
+    {-mplus = Mplus-}
 
 instance Functor Parser where
-    fmap = liftM
+    fmap f v = pure f <*> v
 
 instance Applicative Parser where
     pure = return
-    (<*>) = ap
+    Ret f <*> Ret v = Ret $ f v
+    n <*> Ret a = Ret (\g -> g a) <*> n
+    n1 <*> (n2 :<*> t) = (Ret (.) <*> n1 <*> n2) :<*> t
 
-instance Alternative Parser where
-    empty = mzero
-    (<|>) = mplus
+{-instance Alternative Parser where-}
+    {-empty = mzero-}
+    {-(<|>) = mplus-}
 
 instance Monoid (Parser a) where
     mempty = mzero
@@ -179,10 +185,10 @@ interpretR :: Parser a -> A.Parser a
 interpretR (a :.:  b) = a A..: b
 interpretR (a :.:? b) = a A..:? b
 interpretR (a :.!= b) = interpretR a A..!= b
-interpretR (a :>>= f) = interpretR a >>= interpretR . f
-interpretR (Ret a)     = return a
-interpretR Mzero       = mzero
-interpretR (Mplus a b) = mplus (interpretR a) (interpretR b)
+{-interpretR (a :>>= f) = interpretR a >>= interpretR . f-}
+{-interpretR (Ret a)     = return a-}
+{-interpretR Mzero       = mzero-}
+{-interpretR (Mplus a b) = mplus (interpretR a) (interpretR b)-}
 interpretR (WithText a f v) = A.withText a (interpretR . f) (interpretV v)
 
 data Tree f a = Node a
@@ -210,7 +216,7 @@ instance FromJSON String where
 
 data Test1 = Test1 { field1 :: String
                    , field2 :: String
-                   } deriving Show
+                   } deriving (Show, Typeable)
 
 -- 'A.decode' still works...
 t1 :: Maybe Test1
@@ -220,18 +226,20 @@ t1 = A.decode "{\"field1\": \"Field 1\", \"field2\": \"Field 2\"}"
 t1' :: String
 t1' = show $ show' <$> (toList $ fillOut undefined::[Parser Test1])
 
+t1'' :: [Schema']
+t1'' = mkSchema <$> (toList $ fillOut undefined::[Parser Test1])
 
 -- Lightweight version of mkSchema that helps give a sense, during
 -- interactive development, of what's going on.
 show' :: Parser a -> String
-show' (a :.:  b) = "Required: " ++ unpack b
-show' (a :.:? b) = "Optional: " ++ unpack b
+show' (_ :.:  b) = "Required: " ++ unpack b
+show' (_ :.:? b) = "Optional: " ++ unpack b
 show' (a :.!= b) = show' a ++ " with default" ++ show b
-show' (a :>>= f) = show' a ++ show' (f undefined)
-show' (Ret a)     = "\n"
-show' Mzero       = "mzero"
-show' (Mplus a b) = show' a ++ "or\n" ++ show' b
-show' (WithText a f v) = "Expects: " ++ a  ++ show' (f undefined)
+{-show' (a :>>= f) = show' a ++ show' (f undefined)-}
+{-show' (Ret _)     = "\n"-}
+{-show' Mzero       = "mzero"-}
+{-show' (Mplus a b) = show' a ++ "or\n" ++ show' b-}
+show' (WithText a f _) = "Expects: " ++ a  ++ show' (f undefined)
 
 instance FromJSON Test1 where
     parseJSON (Object v) = Test1 <$> v .: "field1"
