@@ -71,7 +71,7 @@ data Schema' where
 -- | Make a schema from a reified parser. Assumes that only the
 -- @cretheus@-provided combinators (and instance methods) are used on the
 -- inner-value of 'parseJSON''s first argument (the 'Value').
-mkSchema :: Show a => ReifiedP a -> Schema'
+mkSchema :: Show a => Parser a -> Schema'
 mkSchema (a :.:  txt) = Required txt $ typeOf' (Proxy::Proxy a)
 mkSchema (a :.:? txt) = Optional txt $ typeOf' (Proxy::Proxy a)
 mkSchema (a :.!= def) = case mkSchema a of
@@ -86,13 +86,13 @@ typeOf' :: Proxy a -> Typ
 typeOf' = undefined
 -- Compat
 
-(.:) ::  FromJSON a => A.Object -> Text -> ReifiedP a
+(.:) ::  FromJSON a => A.Object -> Text -> Parser a
 (.:)  = (:.:)
 
-(.:?) :: FromJSON b => A.Object -> Text -> ReifiedP (Maybe b)
+(.:?) :: FromJSON b => A.Object -> Text -> Parser (Maybe b)
 (.:?) = (:.:?)
 
-(.!=) :: Show a => ReifiedP (Maybe a) -> a -> ReifiedP a
+(.!=) :: Show a => Parser (Maybe a) -> a -> Parser a
 (.!=) = (:.!=)
 
 -- Non-strict version of 'A.Value'. We need this so we can call 'parseJSON'
@@ -122,7 +122,7 @@ interpretV' (A.Bool v)   = Bool v
 interpretV' A.Null       = Null
 
 class FromJSON a where
-    parseJSON :: Value -> ReifiedP a
+    parseJSON :: Value -> Parser a
 
 instance FromJSON a => A.FromJSON a where
     parseJSON = interpretR . parseJSON . interpretV'
@@ -132,15 +132,15 @@ instance FromJSON a => A.FromJSON a where
 -- which may not. In essence, we want all arguments that may be coming
 -- from inside the outer constructor of the `Value` passed to `parseJSON`
 -- to not be used - e.g., the first argument of `(:.:)`.
-data ReifiedP a where
-    (:.:)  :: FromJSON a => A.Object -> Text -> ReifiedP a
-    (:.:?) :: FromJSON b => A.Object -> Text -> ReifiedP (Maybe b)
-    (:.!=) :: Show a => ReifiedP (Maybe a) -> a -> ReifiedP a
-    (:>>=) :: ReifiedP a -> (a -> ReifiedP b) -> ReifiedP b
-    Ret    :: a -> ReifiedP a
-    Mzero  :: ReifiedP a
-    Mplus  :: ReifiedP a -> ReifiedP a -> ReifiedP a
-    WithText :: String -> (Text -> ReifiedP a) -> Value -> ReifiedP a
+data Parser a where
+    (:.:)  :: FromJSON a => A.Object -> Text -> Parser a
+    (:.:?) :: FromJSON b => A.Object -> Text -> Parser (Maybe b)
+    (:.!=) :: Show a => Parser (Maybe a) -> a -> Parser a
+    (:>>=) :: Parser a -> (a -> Parser b) -> Parser b
+    Ret    :: a -> Parser a
+    Mzero  :: Parser a
+    Mplus  :: Parser a -> Parser a -> Parser a
+    WithText :: String -> (Text -> Parser a) -> Value -> Parser a
 
 {-
 - (:<*>) === RP (a -> b) -> RP a -> RP b
@@ -149,33 +149,33 @@ data ReifiedP a where
 -}
 
 
-instance Monad ReifiedP where
+instance Monad Parser where
     (>>=) = (:>>=)
     return = Ret
 
-instance MonadPlus ReifiedP where
+instance MonadPlus Parser where
     mzero = Mzero
     mplus = Mplus
 
-instance Functor ReifiedP where
+instance Functor Parser where
     fmap = liftM
 
-instance Applicative ReifiedP where
+instance Applicative Parser where
     pure = return
     (<*>) = ap
 
-instance Alternative ReifiedP where
+instance Alternative Parser where
     empty = mzero
     (<|>) = mplus
 
-instance Monoid (ReifiedP a) where
+instance Monoid (Parser a) where
     mempty = mzero
     mappend = mplus
 
--- | Convert a ReifiedP to a Parser.
+-- | Convert a Parser to a Parser.
 -- Currently this is used to interface with all 'aeson' functions, but
 -- that suffers from a (probably avoidable) performance penalty.
-interpretR :: ReifiedP a -> A.Parser a
+interpretR :: Parser a -> A.Parser a
 interpretR (a :.:  b) = a A..: b
 interpretR (a :.:? b) = a A..:? b
 interpretR (a :.!= b) = interpretR a A..!= b
@@ -192,7 +192,7 @@ data Tree f a = Node a
 -- | Pass values with all possible outermost constructors to 'parseJSON',
 -- and collect the results.
 --
-fillOut :: FromJSON a => a -> Tree [] (ReifiedP a)
+fillOut :: FromJSON a => a -> Tree [] (Parser a)
 fillOut _ = Tree
                [ Node $ parseJSON (Array u)
                , Node $ parseJSON (Object u)
@@ -218,12 +218,12 @@ t1 = A.decode "{\"field1\": \"Field 1\", \"field2\": \"Field 2\"}"
 
 -- 'show'' shows the required fields...
 t1' :: String
-t1' = show $ show' <$> (toList $ fillOut undefined::[ReifiedP Test1])
+t1' = show $ show' <$> (toList $ fillOut undefined::[Parser Test1])
 
 
 -- Lightweight version of mkSchema that helps give a sense, during
 -- interactive development, of what's going on.
-show' :: ReifiedP a -> String
+show' :: Parser a -> String
 show' (a :.:  b) = "Required: " ++ unpack b
 show' (a :.:? b) = "Optional: " ++ unpack b
 show' (a :.!= b) = show' a ++ " with default" ++ show b
