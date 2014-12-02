@@ -8,6 +8,37 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+--------------------------------------------------------------------------
+-- |
+-- Module : Data.Cretheus
+-- Copyright : (C) 2014 Zalora SEA
+-- License : BSD3
+-- Maintainer : Julian K. Arni <jkarni@gmail.com>
+-- Stability : experimental
+--
+--
+-- Drop in replacement for 'aeson', with a little extra functionality. In
+-- particular, 'cretheus' allows you to get JSON schemas from your FromJSON
+-- instances [0].
+--
+-- Depends on, rather than forks, the 'aeson' library, and either
+-- re-exports aeson's functions directly, or proxies them under a thin
+-- layer of transformations. You can therefore pick a version of aeson by
+-- just adding it to your cabal file, and not have to wait for bug-fixes
+-- upstream to land here.
+--
+-- *How it works:*
+--
+-- @cretheus@ has its own, reified version of aesons's @Parser@ type. Thus,
+-- when you defined a @FromJSON@ instance using the appropriate
+-- combinators, @cretheus@ can apply @parseJSON@ to dummy values with each
+-- of the possible outermost constructors, collect the results, and
+-- generate schemas from those.
+--
+-- [0] Modulo some restrictions. See 'mkSchema'. These restrictions
+-- influence whether a JSON schema can be created, but not whether the
+-- aeson-functionality still works.
+--------------------------------------------------------------------------
 module Data.Cretheus where
 
 import Control.Monad
@@ -37,6 +68,9 @@ data Schema' where
     And :: Schema' -> Schema' -> Schema'
     Or  :: Schema' -> Schema' -> Schema'
 
+-- | Make a schema from a reified parser. Assumes that only the
+-- @cretheus@-provided combinators (and instance methods) are used on the
+-- inner-value of 'parseJSON''s first argument (the 'Value').
 mkSchema :: Show a => ReifiedP a -> Schema'
 mkSchema (a :.:  txt) = Required txt $ typeOf' (Proxy::Proxy a)
 mkSchema (a :.:? txt) = Optional txt $ typeOf' (Proxy::Proxy a)
@@ -61,7 +95,8 @@ typeOf' = undefined
 (.!=) :: Show a => ReifiedP (Maybe a) -> a -> ReifiedP a
 (.!=) = (:.!=)
 
--- Non-strict version of 'A.Value'
+-- Non-strict version of 'A.Value'. We need this so we can call 'parseJSON'
+-- with undefined.
 data Value = Object A.Object
            | Array A.Array
            | String Text
@@ -150,22 +185,6 @@ interpretR Mzero       = mzero
 interpretR (Mplus a b) = mplus (interpretR a) (interpretR b)
 interpretR (WithText a f v) = A.withText a (interpretR . f) (interpretV v)
 
-
-----Test------------------------------------------------------------------
-
-instance FromJSON String where
-    parseJSON = WithText "String" $ pure . unpack
-
-data Test1 = Test1 { field1 :: String
-                   , field2 :: String
-                   } deriving Show
-
-t1 :: Maybe Test1
-t1 = A.decode "{\"field1\": \"Field 1\", \"field2\": \"Field 2\"}"
-
-t1' :: String
-t1' = show $ show' <$> (toList $ fillOut undefined::[ReifiedP Test1])
-
 data Tree f a = Node a
               | Tree (f (Tree f a))
               deriving (Foldable, Functor)
@@ -184,6 +203,26 @@ fillOut _ = Tree
                ]
     where u = error "I wasn't meant to be evaluated!"
 
+----Test------------------------------------------------------------------
+
+instance FromJSON String where
+    parseJSON = WithText "String" $ pure . unpack
+
+data Test1 = Test1 { field1 :: String
+                   , field2 :: String
+                   } deriving Show
+
+-- 'A.decode' still works...
+t1 :: Maybe Test1
+t1 = A.decode "{\"field1\": \"Field 1\", \"field2\": \"Field 2\"}"
+
+-- 'show'' shows the required fields...
+t1' :: String
+t1' = show $ show' <$> (toList $ fillOut undefined::[ReifiedP Test1])
+
+
+-- Lightweight version of mkSchema that helps give a sense, during
+-- interactive development, of what's going on.
 show' :: ReifiedP a -> String
 show' (a :.:  b) = "Required: " ++ unpack b
 show' (a :.:? b) = "Optional: " ++ unpack b
