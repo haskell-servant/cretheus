@@ -46,6 +46,7 @@ import Control.Monad.Operational
 import Control.Applicative
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Types as A
+import qualified Data.ByteString.Lazy as BS
 import Data.Data
 import Data.Foldable
 import Data.Function (on)
@@ -54,6 +55,7 @@ import Data.Text hiding (singleton)
 import Data.Typeable
 import Data.Scientific
 
+import Debug.Trace
 -- Schema
 
 data Schema' where
@@ -66,6 +68,30 @@ data Schema' where
     Empty :: Schema'   -- Leaf that parses with no further requirements
     deriving Show
 
+instance A.ToJSON Schema' where
+    toJSON x = A.toJSON $ addToSchema (SchemaH [] []) x
+
+data SchemaH = SchemaH [(Text, A.Value)] [Text]
+
+instance A.ToJSON SchemaH where
+    toJSON (SchemaH xs reqs) =
+        A.object [ "type" A..= ("object"::String)
+                 , "properties" A..= A.object xs
+                 , "required" A..= reqs
+                 ]
+
+
+addToSchema :: SchemaH -> Schema' -> SchemaH
+addToSchema (SchemaH xs reqs) (Required field trep) =
+    SchemaH ((field, A.object ["type" A..= show trep]):xs) (field:reqs)
+addToSchema (SchemaH xs reqs) (Optional field trep) =
+    SchemaH ((field, A.object ["type" A..= show trep]):xs) reqs
+addToSchema (SchemaH xs reqs) (Default field def trep) =
+    SchemaH ((field, A.object ["type" A..= show trep, "default" A..= def]):xs) reqs
+addToSchema sch (And s1 s2) = addToSchema (addToSchema sch s2) s1
+addToSchema sch Empty = sch
+addToSchema sch Nil = sch
+
 -- | Make a schema from a reified parser. Assumes that only the
 -- @cretheus@-provided combinators (and instance methods) are used on the
 -- inner-value of 'parseJSON''s first argument (the 'Value').
@@ -74,13 +100,12 @@ mkSchema (_ :.:  txt) = Required txt $ typeOf (undefined::a)
 mkSchema (_ :.:? txt) = Optional txt $ typeOf (undefined::a)
 mkSchema (a :.!= def) = case mkSchemaM a of
                             Optional txt typ -> Default txt (show def) typ
-                            _ -> error "Not implemented"
+                            Required txt typ -> Default txt (show def) typ
+                            Optional txt typ `And` x -> Default txt (show def) typ `And` x
+                            z -> trace ("Here:\t" ++ show z ++ "\n") z
 mkSchema Mzero       = Nil
 {-[>mkSchema (Mplus a b) = mkSchema a `Or` mkSchema b<]-}
 mkSchema (WithText _ f _) = mkSchemaM (f undefined)
--- How do we get the RHS of bind to have a Typeable constraint, and still
--- manage to declare a monad instance?
-{-mkSchema (a :>>= f) = mkSchema a `And` mkSchema (f undefined)-}
 
 mkSchemaM :: Typeable a => ParserM a -> Schema'
 mkSchemaM = eval . view
@@ -91,8 +116,8 @@ mkSchemaM = eval . view
       eval (x@(v :.: t) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
       eval (x@(v :.:? t) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
       eval (x@(v :.!= t) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
-      eval (x@(Mzero) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
-      eval (x@(WithText _ _ _) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@Mzero :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(WithText{}) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
       eval (Return x) = Empty
 -- Compat
 
@@ -149,9 +174,8 @@ data Parser a where
     (:.:)  :: (Typeable a, FromJSON a) => A.Object -> Text -> Parser a
     (:.:?) :: (Typeable b, FromJSON b) => A.Object -> Text -> Parser (Maybe b)
     (:.!=) :: (Typeable a, Show a) => ParserM (Maybe a) -> a -> Parser a
-    {-(:>>=) :: ParserApplicative a -> (a -> ParserApplicative b) -> Parser b-}
     Mzero  :: Typeable a => Parser a
-    {-Mplus  :: Parser a -> Parser a -> Parser a-}
+    Mplus  :: ParserM a -> ParserM a -> Parser a
     WithText :: Typeable a => String -> (Text -> ParserM a) -> Value -> Parser a
 
 type ParserM a = Program Parser a
@@ -194,6 +218,10 @@ fillOut _ = Tree
 instance FromJSON String where
     parseJSON = withText "String" (pure . unpack)
 
+instance FromJSON a => FromJSON (Maybe a) where
+    parseJSON Null = pure Nothing
+    parseJSON a    = Just <$> parseJSON a
+
 data Test1 = Test1 { field1 :: String
                    , field2 :: String
                    } deriving (Show, Typeable)
@@ -202,28 +230,14 @@ data Test1 = Test1 { field1 :: String
 t1 :: Maybe Test1
 t1 = A.decode "{\"field1\": \"Field 1\", \"field2\": \"Field 2\"}"
 
--- 'show'' shows the required fields...
-{-t1' :: String-}
-{-t1' = show $ show' <$> (toList $ fillOut undefined::[Parser Test1])-}
+t1' :: BS.ByteString
+t1' = (A.encode . mkSchemaM <$> (toList $ fillOut undefined::[ParserM Test1])) !! 1
 
-t1'' :: [Schema']
-t1'' = mkSchemaM <$> (toList $ fillOut undefined::[ParserM Test1])
-
--- Lightweight version of mkSchema that helps give a sense, during
--- interactive development, of what's going on.
-{-show' :: Parser a -> String-}
-{-show' (_ :.:  b) = "Required: " ++ unpack b-}
-{-show' (_ :.:? b) = "Optional: " ++ unpack b-}
-{-show' (a :.!= b) = show' a ++ " with default" ++ show b-}
-{-show' (a :>>= f) = show' a ++ show' (f undefined)-}
-{-show' (Ret _)     = "\n"-}
-{-show' Mzero       = "mzero"-}
-{-show' (Mplus a b) = show' a ++ "or\n" ++ show' b-}
-{-show' (WithText a f _) = "Expects: " ++ a  ++ show' (f undefined)-}
 
 instance FromJSON Test1 where
     parseJSON (Object v) = do
-        f1 <- v .: "field1"
-        f2 <- v .: "field2"
-        return (Test1 f1 f2)
+        f1 <- (++ "a suffix") <$> v .: "field1"
+        f2 <- (v .:? "field2") .!= "default-string"
+        let f1' = "a prefix" ++ f1
+        return (Test1 f1' f2)
     parseJSON _            = singleton Mzero
