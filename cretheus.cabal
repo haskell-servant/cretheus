@@ -25,5 +25,6 @@ library
                      , operational
                      , scientific
                      , text
+                     , vector
   -- hs-source-dirs:
   default-language:    Haskell2010

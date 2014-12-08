@@ -52,6 +52,7 @@ interpretP (v :.: t) = v A..: t
 interpretP (v :.:? t) = v A..:? t
 interpretP (v :.!= t) = interpretM v A..!= t
 interpretP Mzero = mzero
+interpretP (WithObject s f v) = A.withObject s (interpretM . f) (interpretV v)
 interpretP (WithText s f v) = A.withText s (interpretM . f) (interpretV v)
 interpretP (WithArray s f v) = A.withArray s (interpretM . f) (interpretV v)
 interpretP (WithScientific s f v) = A.withScientific s (interpretM . f) (interpretV v)
@@ -112,7 +113,11 @@ mkSchema (a :.!= def) = case mkSchemaM a of
     z -> z
 mkSchema Mzero       = Nil
 {-[>mkSchema (Mplus a b) = mkSchema a `Or` mkSchema b<]-}
+mkSchema (WithObject _ f _) = mkSchemaM (f undefined)
 mkSchema (WithText _ f _) = mkSchemaM (f undefined)
+mkSchema (WithArray _ f _) = mkSchemaM (f undefined)
+mkSchema (WithScientific _ f _) = mkSchemaM (f undefined)
+mkSchema (WithBool _ f _) = mkSchemaM (f undefined)
 
 mkSchemaM :: Typeable a => ParserM a -> Schema'
 mkSchemaM = eval . view
@@ -125,6 +130,10 @@ mkSchemaM = eval . view
       eval (x@(v :.!= t) :>>= f)   = mkSchema x `And` mkSchemaM (f undefined)
       eval (Mzero :>>= f)          = Nil
       eval (x@(WithText{}) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(WithObject{}) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(WithBool{}) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(WithScientific{}) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(WithArray{}) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
       eval (Return x)              = Empty
 
 --------------------------------------------------------------------------

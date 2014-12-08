@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverlappingInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 
@@ -24,6 +25,7 @@ import Control.Monad.Operational (singleton)
 import Data.Text (Text, unpack)
 import Data.Scientific (Scientific)
 import Data.Typeable
+import qualified Data.Vector as V
 
 
 instance (FromJSON a) => FromJSON (Maybe a) where
@@ -33,9 +35,23 @@ instance (FromJSON a) => FromJSON (Maybe a) where
 instance FromJSON String where
     parseJSON = withText "String" (pure . unpack)
 
+instance FromJSON Bool where
+    parseJSON = withBool "Bool" pure
+
+instance FromJSON Scientific where
+    parseJSON = withScientific "Scientific" pure
+
+instance FromJSON Integer where
+    parseJSON = withScientific "Integral" $ pure . floor
+
+instance (Typeable a, FromJSON a) => FromJSON [a] where
+    parseJSON = withArray "[a]" $ mapM (parseJSON . interpretV') . V.toList
+
+instance (Typeable a, FromJSON a) => FromJSON (V.Vector a) where
+    parseJSON = withArray "Vector a" $ V.mapM (parseJSON . interpretV')
+
 instance FromJSON Value where
     parseJSON a = pure a
-    {-# INLINE parseJSON #-}
 
 withObject :: (Typeable a) => String -> (A.Object -> ParserM a) -> Value -> ParserM a
 withObject s f v = singleton $ WithObject s f v
