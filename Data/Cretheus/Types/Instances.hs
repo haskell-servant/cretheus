@@ -11,7 +11,11 @@ module Data.Cretheus.Types.Instances
     -- ** Core JSON classes
       FromJSON(..)
       -- * Inspecting @'Value's@
+    , withObject
     , withText
+    , withArray
+    , withScientific
+    , withBool
     -- * Functions
     , (.:)
     , (.:?)
@@ -35,14 +39,20 @@ instance (FromJSON a) => FromJSON (Maybe a) where
 instance FromJSON String where
     parseJSON = withText "String" (pure . unpack)
 
+instance FromJSON Int where
+    parseJSON = parseIntegral "Int"
+
+instance FromJSON Integer where
+    parseJSON = withScientific "Integral" $ pure . floor
+
+instance FromJSON Text where
+    parseJSON = withText "Text" pure
+
 instance FromJSON Bool where
     parseJSON = withBool "Bool" pure
 
 instance FromJSON Scientific where
     parseJSON = withScientific "Scientific" pure
-
-instance FromJSON Integer where
-    parseJSON = withScientific "Integral" $ pure . floor
 
 instance (Typeable a, FromJSON a) => FromJSON [a] where
     parseJSON = withArray "[a]" $ mapM (parseJSON . interpretV') . V.toList
@@ -67,6 +77,9 @@ withScientific s f v = singleton $ WithScientific s f v
 
 withBool :: (Typeable a) => String -> (Bool -> ParserM a) -> Value -> ParserM a
 withBool s f v = singleton $ WithBool s f v
+
+parseIntegral :: (Typeable a, Integral a) => String -> Value -> ParserM a
+parseIntegral expected = withScientific expected $ pure . floor
 
 -- | Retrieve the value associated with the given key of an 'Object'.
 -- The result is 'empty' if the key is not present or the value cannot

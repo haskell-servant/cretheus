@@ -47,7 +47,7 @@ import Data.Cretheus.Schema.Schema
 ----Test------------------------------------------------------------------
 
 
-data Test1 = Test1 { field1 :: String
+data Test1 = Test1 { field1 :: Int
                    , field2 :: String
                    } deriving (Show, Typeable)
 
@@ -61,6 +61,7 @@ t1'' = toSchemas (fromJust t1)
 
 instance FromJSON Test1 where
     parseJSON (Object v) = do
+        -- As long as you're not inspecting 'f1' and 'f2' things are ok
         f1 <-  v .: "field1"
         f2 <- (v .:? "field2") .!= "default-string"
         return (Test1 f1 f2)
