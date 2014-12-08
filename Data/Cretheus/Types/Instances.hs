@@ -22,6 +22,7 @@ import Control.Applicative ((<$>), pure)
 import Data.Cretheus.Types.Internal
 import Control.Monad.Operational (singleton)
 import Data.Text (Text, unpack)
+import Data.Scientific (Scientific)
 import Data.Typeable
 
 
@@ -36,8 +37,20 @@ instance FromJSON Value where
     parseJSON a = pure a
     {-# INLINE parseJSON #-}
 
+withObject :: (Typeable a) => String -> (A.Object -> ParserM a) -> Value -> ParserM a
+withObject s f v = singleton $ WithObject s f v
+
 withText :: (Typeable a) => String -> (Text -> ParserM a) -> Value -> ParserM a
 withText s f v = singleton $ WithText s f v
+
+withArray :: (Typeable a) => String -> (A.Array -> ParserM a) -> Value -> ParserM a
+withArray s f v = singleton $ WithArray s f v
+
+withScientific :: (Typeable a) => String -> (Scientific -> ParserM a) -> Value -> ParserM a
+withScientific s f v = singleton $ WithScientific s f v
+
+withBool :: (Typeable a) => String -> (Bool -> ParserM a) -> Value -> ParserM a
+withBool s f v = singleton $ WithBool s f v
 
 -- | Retrieve the value associated with the given key of an 'Object'.
 -- The result is 'empty' if the key is not present or the value cannot

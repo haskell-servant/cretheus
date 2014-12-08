@@ -14,6 +14,7 @@ import Control.Monad
 import Data.Data
 import Data.Scientific
 import Control.Monad.Operational
+import Data.Scientific (Scientific)
 import Data.Typeable
 import Data.Text hiding (singleton, filter)
 
@@ -37,7 +38,12 @@ data Parser a where
     (:.!=) :: (Typeable a, Show a) => ParserM (Maybe a) -> a -> Parser a
     Mzero  :: Parser a
     Mplus  :: ParserM a -> ParserM a -> Parser a
+    WithObject :: Typeable a => String -> (A.Object -> ParserM a) -> Value -> Parser a
     WithText :: Typeable a => String -> (Text -> ParserM a) -> Value -> Parser a
+    WithArray :: Typeable a => String -> (A.Array -> ParserM a) -> Value -> Parser a
+    WithScientific :: Typeable a => String -> (Scientific -> ParserM a) -> Value -> Parser a
+    WithBool :: Typeable a => String -> (Bool -> ParserM a) -> Value -> Parser a
+
 
 type ParserM a = Program Parser a
 
@@ -47,6 +53,9 @@ interpretP (v :.:? t) = v A..:? t
 interpretP (v :.!= t) = interpretM v A..!= t
 interpretP Mzero = mzero
 interpretP (WithText s f v) = A.withText s (interpretM . f) (interpretV v)
+interpretP (WithArray s f v) = A.withArray s (interpretM . f) (interpretV v)
+interpretP (WithScientific s f v) = A.withScientific s (interpretM . f) (interpretV v)
+interpretP (WithBool s f v) = A.withBool s (interpretM . f) (interpretV v)
 
 -- | Convert a Parser to a Parser.
 -- Currently this is used to interface with all 'aeson' functions, but
@@ -56,6 +65,7 @@ interpretM = interpretWithMonad interpretP
 
 instance MonadPlus (Program Parser) where
     mzero = singleton Mzero
+    mplus = error "mplus: not implemented"
 --------------------------------------------------------------------------
 -- Schemas
 --------------------------------------------------------------------------

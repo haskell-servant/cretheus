@@ -44,8 +44,6 @@ import Data.Maybe (fromJust)
 import Data.Cretheus.Types
 import Data.Cretheus.Schema.Schema
 
-import Debug.Trace
-
 ----Test------------------------------------------------------------------
 
 
