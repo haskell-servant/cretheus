@@ -88,12 +88,12 @@ mkSchemaM = eval . view
       -- We need to pattern match on the constructors to bring the
       -- typeable constraint into scope
       eval :: Typeable a => ProgramView Parser a -> Schema'
-      eval (x@(v :.: t) :>>= f) = mkSchema x
-      eval (x@(v :.:? t) :>>= f) = mkSchema x
-      eval (x@(v :.!= t) :>>= f) = mkSchema x
-      eval (x@(Mzero) :>>= f) = mkSchema x
-      eval (x@(WithText _ _ _) :>>= f) = mkSchema x
-      {-eval (Return x) = mkSchema x-}
+      eval (x@(v :.: t) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(v :.:? t) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(v :.!= t) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(Mzero) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(WithText _ _ _) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (Return x) = Empty
 -- Compat
 
 (.:) :: (Typeable a, FromJSON a) => A.Object -> Text -> ParserM a
