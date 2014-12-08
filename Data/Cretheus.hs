@@ -42,58 +42,96 @@
 module Data.Cretheus where
 
 import Control.Monad
+import Control.Monad.Operational
 import Control.Applicative
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Types as A
+import qualified Data.ByteString.Lazy as BS
 import Data.Data
 import Data.Foldable
+import Data.Function (on)
 import Data.Monoid
-import Data.Text
+import Data.Text hiding (singleton)
 import Data.Typeable
 import Data.Scientific
-import Data.Proxy
 
+import Debug.Trace
 -- Schema
 
-data Typ
-
-data a :*: b = a :*: b
-data a :+: b = a :+: b
-
-
 data Schema' where
-    Required :: Text -> Typ -> Schema'
-    Optional :: Text -> Typ -> Schema'
-    Default :: Text -> String -> Typ -> Schema'
+    Required :: Text -> TypeRep -> Schema'
+    Optional :: Text -> TypeRep -> Schema'
+    Default :: Text -> String -> TypeRep -> Schema'
     And :: Schema' -> Schema' -> Schema'
     Or  :: Schema' -> Schema' -> Schema'
+    Nil :: Schema'     -- Leaf that doesn't parse
+    Empty :: Schema'   -- Leaf that parses with no further requirements
+    deriving Show
+
+instance A.ToJSON Schema' where
+    toJSON x = A.toJSON $ addToSchema (SchemaH [] []) x
+
+data SchemaH = SchemaH [(Text, A.Value)] [Text]
+
+instance A.ToJSON SchemaH where
+    toJSON (SchemaH xs reqs) =
+        A.object [ "type" A..= ("object"::String)
+                 , "properties" A..= A.object xs
+                 , "required" A..= reqs
+                 ]
+
+
+addToSchema :: SchemaH -> Schema' -> SchemaH
+addToSchema (SchemaH xs reqs) (Required field trep) =
+    SchemaH ((field, A.object ["type" A..= show trep]):xs) (field:reqs)
+addToSchema (SchemaH xs reqs) (Optional field trep) =
+    SchemaH ((field, A.object ["type" A..= show trep]):xs) reqs
+addToSchema (SchemaH xs reqs) (Default field def trep) =
+    SchemaH ((field, A.object ["type" A..= show trep, "default" A..= def]):xs) reqs
+addToSchema sch (And s1 s2) = addToSchema (addToSchema sch s2) s1
+addToSchema sch Empty = sch
+addToSchema sch Nil = sch
 
 -- | Make a schema from a reified parser. Assumes that only the
 -- @cretheus@-provided combinators (and instance methods) are used on the
 -- inner-value of 'parseJSON''s first argument (the 'Value').
-mkSchema :: Show a => Parser a -> Schema'
-mkSchema (a :.:  txt) = Required txt $ typeOf' (Proxy::Proxy a)
-mkSchema (a :.:? txt) = Optional txt $ typeOf' (Proxy::Proxy a)
-mkSchema (a :.!= def) = case mkSchema a of
+mkSchema :: forall a. Typeable a => Parser a -> Schema'
+mkSchema (_ :.:  txt) = Required txt $ typeOf (undefined::a)
+mkSchema (_ :.:? txt) = Optional txt $ typeOf (undefined::a)
+mkSchema (a :.!= def) = case mkSchemaM a of
                             Optional txt typ -> Default txt (show def) typ
-{-mkSchema (a :>>= f) = m-}
-{-mkSchema (Ret a)     = return a-}
-{-mkSchema Mzero       = -}
-mkSchema (Mplus a b) = mkSchema a `And` mkSchema b
+                            Required txt typ -> Default txt (show def) typ
+                            Optional txt typ `And` x -> Default txt (show def) typ `And` x
+                            z -> trace ("Here:\t" ++ show z ++ "\n") z
+mkSchema Mzero       = Nil
+{-[>mkSchema (Mplus a b) = mkSchema a `Or` mkSchema b<]-}
+mkSchema (WithText _ f _) = mkSchemaM (f undefined)
 
-
-typeOf' :: Proxy a -> Typ
-typeOf' = undefined
+mkSchemaM :: Typeable a => ParserM a -> Schema'
+mkSchemaM = eval . view
+    where
+      -- We need to pattern match on the constructors to bring the
+      -- typeable constraint into scope
+      eval :: Typeable a => ProgramView Parser a -> Schema'
+      eval (x@(v :.: t) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(v :.:? t) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(v :.!= t) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@Mzero :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (x@(WithText{}) :>>= f) = mkSchema x `And` mkSchemaM (f undefined)
+      eval (Return x) = Empty
 -- Compat
 
-(.:) ::  FromJSON a => A.Object -> Text -> Parser a
-(.:)  = (:.:)
+(.:) :: (Typeable a, FromJSON a) => A.Object -> Text -> ParserM a
+x .: t  = singleton $ x :.: t
 
-(.:?) :: FromJSON b => A.Object -> Text -> Parser (Maybe b)
-(.:?) = (:.:?)
+(.:?) :: (Typeable b, FromJSON b) => A.Object -> Text -> ParserM (Maybe b)
+x .:? t = singleton $ x :.:? t
 
-(.!=) :: Show a => Parser (Maybe a) -> a -> Parser a
-(.!=) = (:.!=)
+(.!=) :: (Typeable a, Show a) => ParserM (Maybe a) -> a -> ParserM a
+p .!= t = singleton $ p :.!= t
+
+withText :: (Typeable a) => String -> (Text -> ParserM a) -> Value -> ParserM a
+withText s f v = singleton $ WithText s f v
 
 -- Non-strict version of 'A.Value'. We need this so we can call 'parseJSON'
 -- with undefined.
@@ -122,10 +160,10 @@ interpretV' (A.Bool v)   = Bool v
 interpretV' A.Null       = Null
 
 class FromJSON a where
-    parseJSON :: Value -> Parser a
+    parseJSON :: Value -> ParserM a
 
 instance FromJSON a => A.FromJSON a where
-    parseJSON = interpretR . parseJSON . interpretV'
+    parseJSON = interpretM . parseJSON . interpretV'
 
 
 -- It'll be important to keep track of which fields may be evaluated, and
@@ -133,57 +171,29 @@ instance FromJSON a => A.FromJSON a where
 -- from inside the outer constructor of the `Value` passed to `parseJSON`
 -- to not be used - e.g., the first argument of `(:.:)`.
 data Parser a where
-    (:.:)  :: FromJSON a => A.Object -> Text -> Parser a
-    (:.:?) :: FromJSON b => A.Object -> Text -> Parser (Maybe b)
-    (:.!=) :: Show a => Parser (Maybe a) -> a -> Parser a
-    (:>>=) :: Parser a -> (a -> Parser b) -> Parser b
-    Ret    :: a -> Parser a
-    Mzero  :: Parser a
-    Mplus  :: Parser a -> Parser a -> Parser a
-    WithText :: String -> (Text -> Parser a) -> Value -> Parser a
+    (:.:)  :: (Typeable a, FromJSON a) => A.Object -> Text -> Parser a
+    (:.:?) :: (Typeable b, FromJSON b) => A.Object -> Text -> Parser (Maybe b)
+    (:.!=) :: (Typeable a, Show a) => ParserM (Maybe a) -> a -> Parser a
+    Mzero  :: Typeable a => Parser a
+    Mplus  :: ParserM a -> ParserM a -> Parser a
+    WithText :: Typeable a => String -> (Text -> ParserM a) -> Value -> Parser a
 
-{-
-- (:<*>) === RP (a -> b) -> RP a -> RP b
--   \---> +/-  AND
-- <*> = m1 >>= \x1 -> m2 >>= \x2 -> return $ x1 x2
--}
+type ParserM a = Program Parser a
 
 
-instance Monad Parser where
-    (>>=) = (:>>=)
-    return = Ret
-
-instance MonadPlus Parser where
-    mzero = Mzero
-    mplus = Mplus
-
-instance Functor Parser where
-    fmap = liftM
-
-instance Applicative Parser where
-    pure = return
-    (<*>) = ap
-
-instance Alternative Parser where
-    empty = mzero
-    (<|>) = mplus
-
-instance Monoid (Parser a) where
-    mempty = mzero
-    mappend = mplus
+interpretP :: Parser a -> A.Parser a
+interpretP (v :.: t) = v A..: t
+interpretP (v :.:? t) = v A..:? t
+interpretP (v :.!= t) = interpretM v A..!= t
+interpretP Mzero = mzero
+interpretP (WithText s f v) = A.withText s (interpretM . f) (interpretV v)
 
 -- | Convert a Parser to a Parser.
 -- Currently this is used to interface with all 'aeson' functions, but
 -- that suffers from a (probably avoidable) performance penalty.
-interpretR :: Parser a -> A.Parser a
-interpretR (a :.:  b) = a A..: b
-interpretR (a :.:? b) = a A..:? b
-interpretR (a :.!= b) = interpretR a A..!= b
-interpretR (a :>>= f) = interpretR a >>= interpretR . f
-interpretR (Ret a)     = return a
-interpretR Mzero       = mzero
-interpretR (Mplus a b) = mplus (interpretR a) (interpretR b)
-interpretR (WithText a f v) = A.withText a (interpretR . f) (interpretV v)
+interpretM :: ParserM a -> A.Parser a
+interpretM = interpretWithMonad interpretP
+
 
 data Tree f a = Node a
               | Tree (f (Tree f a))
@@ -192,7 +202,7 @@ data Tree f a = Node a
 -- | Pass values with all possible outermost constructors to 'parseJSON',
 -- and collect the results.
 --
-fillOut :: FromJSON a => a -> Tree [] (Parser a)
+fillOut :: FromJSON a => a -> Tree [] (ParserM a)
 fillOut _ = Tree
                [ Node $ parseJSON (Array u)
                , Node $ parseJSON (Object u)
@@ -206,34 +216,28 @@ fillOut _ = Tree
 ----Test------------------------------------------------------------------
 
 instance FromJSON String where
-    parseJSON = WithText "String" $ pure . unpack
+    parseJSON = withText "String" (pure . unpack)
+
+instance FromJSON a => FromJSON (Maybe a) where
+    parseJSON Null = pure Nothing
+    parseJSON a    = Just <$> parseJSON a
 
 data Test1 = Test1 { field1 :: String
                    , field2 :: String
-                   } deriving Show
+                   } deriving (Show, Typeable)
 
 -- 'A.decode' still works...
 t1 :: Maybe Test1
 t1 = A.decode "{\"field1\": \"Field 1\", \"field2\": \"Field 2\"}"
 
--- 'show'' shows the required fields...
-t1' :: String
-t1' = show $ show' <$> (toList $ fillOut undefined::[Parser Test1])
+t1' :: BS.ByteString
+t1' = (A.encode . mkSchemaM <$> (toList $ fillOut undefined::[ParserM Test1])) !! 1
 
-
--- Lightweight version of mkSchema that helps give a sense, during
--- interactive development, of what's going on.
-show' :: Parser a -> String
-show' (a :.:  b) = "Required: " ++ unpack b
-show' (a :.:? b) = "Optional: " ++ unpack b
-show' (a :.!= b) = show' a ++ " with default" ++ show b
-show' (a :>>= f) = show' a ++ show' (f undefined)
-show' (Ret a)     = "\n"
-show' Mzero       = "mzero"
-show' (Mplus a b) = show' a ++ "or\n" ++ show' b
-show' (WithText a f v) = "Expects: " ++ a  ++ show' (f undefined)
 
 instance FromJSON Test1 where
-    parseJSON (Object v) = Test1 <$> v .: "field1"
-                                   <*> v .: "field2"
-    parseJSON _            = mzero
+    parseJSON (Object v) = do
+        f1 <- (++ "a suffix") <$> v .: "field1"
+        f2 <- (v .:? "field2") .!= "default-string"
+        let f1' = "a prefix" ++ f1
+        return (Test1 f1' f2)
+    parseJSON _            = singleton Mzero
