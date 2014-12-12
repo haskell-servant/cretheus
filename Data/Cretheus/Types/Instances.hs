@@ -2,6 +2,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverlappingInstances #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 
@@ -54,31 +55,31 @@ instance FromJSON Bool where
 instance FromJSON Scientific where
     parseJSON = withScientific "Scientific" pure
 
-instance (Typeable a, FromJSON a) => FromJSON [a] where
+instance (A.ToJSON a, Typeable a, FromJSON a) => FromJSON [a] where
     parseJSON = withArray "[a]" $ mapM (parseJSON . interpretV') . V.toList
 
-instance (Typeable a, FromJSON a) => FromJSON (V.Vector a) where
+instance (A.ToJSON a, Typeable a, FromJSON a) => FromJSON (V.Vector a) where
     parseJSON = withArray "Vector a" $ V.mapM (parseJSON . interpretV')
 
 instance FromJSON Value where
     parseJSON a = pure a
 
-withObject :: (Typeable a) => String -> (A.Object -> ParserM a) -> Value -> ParserM a
+withObject :: (A.ToJSON a, Typeable a) => String -> (A.Object -> ParserM a) -> Value -> ParserM a
 withObject s f v = singleton $ WithObject s f v
 
-withText :: (Typeable a) => String -> (Text -> ParserM a) -> Value -> ParserM a
+withText :: (A.ToJSON a, Typeable a) => String -> (Text -> ParserM a) -> Value -> ParserM a
 withText s f v = singleton $ WithText s f v
 
-withArray :: (Typeable a) => String -> (A.Array -> ParserM a) -> Value -> ParserM a
+withArray :: (A.ToJSON a, Typeable a) => String -> (A.Array -> ParserM a) -> Value -> ParserM a
 withArray s f v = singleton $ WithArray s f v
 
-withScientific :: (Typeable a) => String -> (Scientific -> ParserM a) -> Value -> ParserM a
+withScientific :: (A.ToJSON a, Typeable a) => String -> (Scientific -> ParserM a) -> Value -> ParserM a
 withScientific s f v = singleton $ WithScientific s f v
 
-withBool :: (Typeable a) => String -> (Bool -> ParserM a) -> Value -> ParserM a
+withBool :: (A.ToJSON a, Typeable a) => String -> (Bool -> ParserM a) -> Value -> ParserM a
 withBool s f v = singleton $ WithBool s f v
 
-parseIntegral :: (Typeable a, Integral a) => String -> Value -> ParserM a
+parseIntegral :: (A.ToJSON a, Typeable a, Integral a) => String -> Value -> ParserM a
 parseIntegral expected = withScientific expected $ pure . floor
 
 -- | Retrieve the value associated with the given key of an 'Object'.
@@ -88,7 +89,7 @@ parseIntegral expected = withScientific expected $ pure . floor
 -- This accessor is appropriate if the key and value /must/ be present
 -- in an object for it to be valid.  If the key and value are
 -- optional, use '(.:?)' instead.
-(.:) :: (Typeable a, FromJSON a) => A.Object -> Text -> ParserM a
+(.:) :: (Typeable a,  A.ToJSON a, FromJSON a) => A.Object -> Text -> ParserM a
 x .: t  = singleton $ x :.: t
 {-# INLINE (.:) #-}
 
@@ -100,7 +101,7 @@ x .: t  = singleton $ x :.: t
 -- This accessor is most useful if the key and value can be absent
 -- from an object without affecting its validity.  If the key and
 -- value are mandatory, use '(.:)' instead.
-(.:?) :: (Typeable b, FromJSON b) => A.Object -> Text -> ParserM (Maybe b)
+(.:?) :: (Typeable b, FromJSON b, A.ToJSON b) => A.Object -> Text -> ParserM (Maybe b)
 x .:? t = singleton $ x :.:? t
 {-# INLINE (.:?) #-}
 
@@ -118,16 +119,9 @@ x .:? t = singleton $ x :.:? t
 -- v2 <- o '.:'  \"mandatory_field\"
 -- v3 <- o '.:?' \"opt_field2\"
 -- @
-(.!=) :: (Typeable a, Show a) => ParserM (Maybe a) -> a -> ParserM a
+(.!=) :: (Typeable a, A.ToJSON a, Show a) => ParserM (Maybe a) -> a -> ParserM a
 p .!= t = singleton $ p :.!= t
 {-# INLINE (.!=) #-}
 
 
--- internal instances
 
-instance A.ToJSON SchemaH where
-    toJSON (SchemaH typ xs reqs) =
-        A.object [ "type" A..= typ
-                 , "properties" A..= A.object xs
-                 , "required" A..= reqs
-                 ]

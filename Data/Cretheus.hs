@@ -63,6 +63,11 @@ instance FromJSON Test1 where
     parseJSON (Object v) = do
         -- As long as you're not inspecting 'f1' and 'f2' things are ok
         f1 <-  v .: "field1"
-        f2 <- (v .:? "field2") .!= "default-string"
+        f2 <- (v .: "field2")
         return (Test1 f1 f2)
     parseJSON _            = mzero
+
+instance ToJSON Test1 where
+    toJSON t = object [ "field1" .= field1 t
+                      , "field2" .= field2 t
+                      ]

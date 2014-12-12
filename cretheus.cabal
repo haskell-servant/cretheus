@@ -1,7 +1,11 @@
 name:                cretheus
 version:             0.1.0.0
--- synopsis:
--- description:
+synopsis:            Aeson with Schemas
+description:
+    Drop in replacement for 'aeson', with support for generating schemas.
+    .
+    N.B.: A lot of this code comes from Aeson, for which the license and
+    copyright of course differ.
 license:             BSD3
 license-file:        LICENSE
 author:              Julian K. Arni
@@ -17,14 +21,12 @@ library
                      , Data.Cretheus.Types.Class
                      , Data.Cretheus.Types.Instances
                      , Data.Cretheus.Types.Internal
-  -- other-modules:
-  -- other-extensions:
   build-depends:       base >=4.7 && <4.8
                      , aeson
                      , bytestring
                      , operational
                      , scientific
                      , text
+                     , json-schema
                      , vector
-  -- hs-source-dirs:
   default-language:    Haskell2010
