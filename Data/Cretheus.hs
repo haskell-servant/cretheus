@@ -39,6 +39,7 @@ import Control.Monad
 import Data.Aeson hiding ( FromJSON(..), Object, (.:), (.:?), (.!=)
                          , Value(..),
                          )
+import Data.Aeson.Encode.Pretty
 import Data.Data
 import Data.Maybe (fromJust)
 import Data.Cretheus.Types
@@ -58,6 +59,7 @@ t1 = decode "{\"field1\": \"Field 1\", \"field2\": \"Field 2\"}"
 
 t1'' = toSchemas (fromJust t1)
 
+t2 = toSchemas ("str"::String)
 
 instance FromJSON Test1 where
     parseJSON (Object v) = do

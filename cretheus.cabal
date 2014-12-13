@@ -23,6 +23,7 @@ library
                      , Data.Cretheus.Types.Internal
   build-depends:       base >=4.7 && <4.8
                      , aeson
+                     , aeson-pretty
                      , bytestring
                      , operational
                      , scientific
